@@ -97,6 +97,26 @@ db.serialize(() => {
     value TEXT
   )`);
 
+  db.run(`CREATE TABLE IF NOT EXISTS rarity_filters (
+    rarityName TEXT PRIMARY KEY,
+    enabled INTEGER DEFAULT 1
+  )`);
+
+  db.get(`SELECT COUNT(*) as count FROM rarity_filters`, [], (err, row) => {
+    if (!err && row && row.count === 0) {
+      const stmt = db.prepare(`INSERT OR REPLACE INTO rarity_filters (rarityName, enabled) VALUES (?, ?)`);
+      stmt.run('unique', 1);
+      stmt.run('ancient', 1);
+      stmt.run('godly', 1);
+      stmt.run('chroma', 1);
+      stmt.run('legendary', 0);
+      stmt.run('rare', 0);
+      stmt.run('uncommon', 0);
+      stmt.run('common', 0);
+      stmt.finalize();
+    }
+  });
+
   // Restore active sessions from DB on startup
   db.all(`SELECT * FROM sessions`, [], (err, rows) => {
     if (!err && rows) {
@@ -353,19 +373,40 @@ app.get('/api/filters', (req, res) => {
   db.get(`SELECT value FROM system_config WHERE key = 'minThreshold'`, [], (err, configRow) => {
     const minThreshold = configRow ? parseFloat(configRow.value) : 1.00;
     
-    db.all(`SELECT itemName, enabled FROM item_filters`, [], (err, rows) => {
+    db.all(`SELECT itemName, enabled FROM item_filters`, [], (err, itemRows) => {
       if (err) return res.status(500).json({ error: err.message });
       const items = {};
-      rows.forEach(row => {
-        items[row.itemName] = row.enabled === 1;
+      if (itemRows) {
+        itemRows.forEach(row => {
+          items[row.itemName] = row.enabled === 1;
+        });
+      }
+      
+      db.all(`SELECT rarityName, enabled FROM rarity_filters`, [], (err, rarityRows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        const rarities = {
+          unique: true,
+          ancient: true,
+          godly: true,
+          chroma: true,
+          legendary: false,
+          rare: false,
+          uncommon: false,
+          common: false
+        };
+        if (rarityRows) {
+          rarityRows.forEach(row => {
+            rarities[row.rarityName] = row.enabled === 1;
+          });
+        }
+        res.json({ minThreshold, items, rarities });
       });
-      res.json({ minThreshold, items });
     });
   });
 });
 
 app.post('/api/filters/save', (req, res) => {
-  const { minThreshold, items } = req.body;
+  const { minThreshold, items, rarities } = req.body;
   
   db.serialize(() => {
     if (minThreshold !== undefined) {
@@ -376,6 +417,14 @@ app.post('/api/filters/save', (req, res) => {
       const stmt = db.prepare(`INSERT OR REPLACE INTO item_filters (itemName, enabled) VALUES (?, ?)`);
       Object.entries(items).forEach(([name, enabled]) => {
         stmt.run(name, enabled ? 1 : 0);
+      });
+      stmt.finalize();
+    }
+    
+    if (rarities && typeof rarities === 'object') {
+      const stmt = db.prepare(`INSERT OR REPLACE INTO rarity_filters (rarityName, enabled) VALUES (?, ?)`);
+      Object.entries(rarities).forEach(([name, enabled]) => {
+        stmt.run(name.toLowerCase(), enabled ? 1 : 0);
       });
       stmt.finalize();
     }

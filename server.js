@@ -58,7 +58,9 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS whitelist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
-    isMain INTEGER DEFAULT 0
+    isMain INTEGER DEFAULT 0,
+    userId TEXT,
+    avatarUrl TEXT
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS item_filters (
     itemName TEXT PRIMARY KEY,

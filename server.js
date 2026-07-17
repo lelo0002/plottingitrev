@@ -13,8 +13,16 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 
-// Add a default route for the home page status check
-app.get('/', (req, res) => {
+// Serve frontend build static files
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Serve index.html for any non-API route to support single page app routing
+app.get(/^(?!\/api).*$/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// Keep API status check
+app.get('/api/status', (req, res) => {
   res.json({ status: "online", message: "mm2hook API is running successfully!" });
 });
 

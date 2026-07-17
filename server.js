@@ -17,7 +17,11 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Serve index.html for any non-API route to support single page app routing
-app.get(/^(?!\/api).*$/, (req, res) => {
+app.get('*', (req, res) => {
+  // If the path looks like an API call but didn't match any route, return 404
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: 'Not Found' });
+  }
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
@@ -35,10 +39,19 @@ try {
 
 const activeSessions = {};
 
+// Ensure a persistent data directory exists (Render persistent disk should be mounted here)
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// Use env var DB_PATH if set, otherwise default to data directory
+const dbPath = process.env.DB_PATH || path.join(dataDir, 'database.db');
+
 // Initialize DB with new schema (status for profits, whitelist table)
-const db = new sqlite3.Database(path.join(__dirname, 'database.db'), (err) => {
+const db = new sqlite3.Database(dbPath, (err) => {
   if (err) console.error('Database error:', err.message);
-  else console.log('Connected to SQLite database.');
+  else console.log('Connected to SQLite database at', dbPath);
 });
 
 db.serialize(() => {

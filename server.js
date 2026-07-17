@@ -13,6 +13,11 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 
+// Add a default route for the home page status check
+app.get('/', (req, res) => {
+  res.json({ status: "online", message: "mm2hook API is running successfully!" });
+});
+
 let pricesData = {};
 try {
   pricesData = JSON.parse(fs.readFileSync(path.join(__dirname, 'prices.json'), 'utf8'));

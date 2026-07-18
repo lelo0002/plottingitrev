@@ -16,12 +16,12 @@ app.use(express.json());
 // Serve frontend build static files
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Serve index.html for any non-API route to support single page app routing
-app.get('/:path(.*)', (req, res) => {
-  // If the path looks like an API call but didn't match any route, return 404
+// Serve index.html for SPA routes (Express 5 compatible)
+app.use((req, res, next) => {
   if (req.path.startsWith('/api')) {
     return res.status(404).json({ error: 'Not Found' });
   }
+
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 

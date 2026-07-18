@@ -14,11 +14,9 @@ app.use(cors());
 app.use(express.json());
 
 // API homepage
+// Serve frontend homepage
 app.get('/', (req, res) => {
-  res.json({
-    status: "online",
-    message: "mm2hook API is running successfully!"
-  });
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 // Serve frontend build static files

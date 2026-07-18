@@ -435,7 +435,7 @@ app.post('/api/filters/save', (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Fallback all other routes to index.html to support React Router (if needed)
-app.get('/(.*)', (req, res) => {
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 

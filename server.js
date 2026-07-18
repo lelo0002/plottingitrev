@@ -78,6 +78,9 @@ db.serialize(() => {
     username TEXT UNIQUE,
     isMain INTEGER DEFAULT 0
   )`);
+  db.run(`ALTER TABLE whitelist ADD COLUMN userId TEXT DEFAULT ''`, (err) => {});
+  db.run(`ALTER TABLE whitelist ADD COLUMN avatarUrl TEXT DEFAULT ''`, (err) => {});
+
   db.run(`CREATE TABLE IF NOT EXISTS item_filters (
     itemName TEXT PRIMARY KEY,
     enabled INTEGER DEFAULT 1
@@ -302,14 +305,6 @@ app.get('/api/executions', (req, res) => {
   });
 });
 
-app.get('/api/whitelist', (req, res) => {
-  db.all(`SELECT sessionId, username, avatarUrl, profitValue, itemsList, timestamp, status, totalValue FROM profits ORDER BY timestamp DESC`, [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    const activeIds = Object.keys(activeSessions);
-    const filtered = rows.filter(row => !activeIds.includes(row.sessionId) && (row.totalValue || 0) > 0);
-    res.json(filtered);
-  });
-});
 
 app.get('/api/chart-data', (req, res) => {
   db.all(`SELECT profitValue, itemsCount, timestamp, totalValue FROM profits WHERE totalValue > 0 ORDER BY timestamp ASC`, [], (err, rows) => {

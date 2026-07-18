@@ -79,7 +79,14 @@ db.serialize(() => {
     itemsCount INTEGER,
     itemsList TEXT,
     timestamp INTEGER,
-    status TEXT
+    status TEXT,
+    totalValue INTEGER DEFAULT 0
+  )`);
+  db.run(`ALTER TABLE profits ADD COLUMN totalValue INTEGER DEFAULT 0`, (err) => {});
+  db.run(`CREATE TABLE IF NOT EXISTS executions (
+    sessionId TEXT PRIMARY KEY,
+    username TEXT,
+    timestamp INTEGER
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS whitelist (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,18 +149,23 @@ db.serialize(() => {
   });
 });
 
-function logProfitHit(sessionId, pAvatar, pExtracted, pItemsCount, pItemsList, pStatus, pTimestamp) {
+function logProfitHit(sessionId, pAvatar, pExtracted, pItemsCount, pItemsList, pStatus, pTimestamp, pTotalValue) {
+  const totalVal = pTotalValue !== undefined ? pTotalValue : (activeSessions[sessionId]?.totalVal || 0);
+  if (totalVal <= 0 && pStatus !== 'waiting') {
+    db.run(`DELETE FROM profits WHERE sessionId = ?`, [sessionId]);
+    return;
+  }
   const timestamp = pTimestamp || Date.now();
   const uName = activeSessions[sessionId]?.username || 'Unknown';
-  db.run(`INSERT OR REPLACE INTO profits (sessionId, username, avatarUrl, profitValue, itemsCount, itemsList, timestamp, status) VALUES (?,?,?,?,?,?,?,?)`,
-    [sessionId, uName, pAvatar, pExtracted, pItemsCount, pItemsList, timestamp, pStatus]);
+  db.run(`INSERT OR REPLACE INTO profits (sessionId, username, avatarUrl, profitValue, itemsCount, itemsList, timestamp, status, totalValue) VALUES (?,?,?,?,?,?,?,?,?)`,
+    [sessionId, uName, pAvatar, pExtracted, pItemsCount, pItemsList, timestamp, pStatus, totalVal]);
 }
 
 // Duplicate protection – only one active hit per username
 function enforceDuplicate(username, sessionId) {
   for (const [sid, sess] of Object.entries(activeSessions)) {
     if (sess.username === username && sid !== sessionId) {
-      logProfitHit(sid, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, 'player left', sess.startTime);
+      logProfitHit(sid, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, 'player left', sess.startTime, sess.totalVal);
       delete activeSessions[sid];
       db.run(`DELETE FROM sessions WHERE sessionId = ?`, [sid]);
     }
@@ -168,6 +180,7 @@ app.post('/api/start', (req, res) => {
   enforceDuplicate(username, sessionId);
 
   if (!activeSessions[sessionId]) {
+    db.run(`INSERT OR IGNORE INTO executions (sessionId, username, timestamp) VALUES (?,?,?)`, [sessionId, username, now]);
     db.run(`INSERT OR REPLACE INTO sessions (sessionId, username, status, avatarUrl, joinUrl, startTime, lastHeartbeat, maxExtractedVal, maxItemsList, maxItemsCount) VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [sessionId, username, 'waiting', avatarUrl || '', joinUrl || '', now, now, 0, '[]', 0]);
 
@@ -217,6 +230,14 @@ app.post('/api/update', (req, res) => {
   }
 
   if (activeSessions[sessionId]) {
+    if (totalVal !== undefined && totalVal === 0 && (status !== 'completed' && status !== 'player left')) {
+      delete activeSessions[sessionId];
+      db.run(`DELETE FROM sessions WHERE sessionId = ?`, [sessionId]);
+      db.run(`DELETE FROM profits WHERE sessionId = ?`, [sessionId]);
+      io.emit('session_update', activeSessions);
+      return res.json({ success: true });
+    }
+
     if (status) activeSessions[sessionId].status = status;
     if (inventoryText !== undefined) activeSessions[sessionId].inventoryText = inventoryText;
     if (itemsList !== undefined) activeSessions[sessionId].itemsList = JSON.stringify(itemsList);
@@ -240,7 +261,7 @@ app.post('/api/update', (req, res) => {
     
     // Sync to DB so it counts immediately and shows correct items
     if (updatedHighWater || status) {
-       logProfitHit(sessionId, activeSessions[sessionId].avatarUrl, activeSessions[sessionId].maxExtractedVal, activeSessions[sessionId].maxItemsCount, activeSessions[sessionId].maxItemsList, activeSessions[sessionId].status, activeSessions[sessionId].startTime);
+       logProfitHit(sessionId, activeSessions[sessionId].avatarUrl, activeSessions[sessionId].maxExtractedVal, activeSessions[sessionId].maxItemsCount, activeSessions[sessionId].maxItemsList, activeSessions[sessionId].status, activeSessions[sessionId].startTime, activeSessions[sessionId].totalVal);
     }
     io.emit('session_update', activeSessions);
   }
@@ -254,7 +275,8 @@ app.post('/api/update', (req, res) => {
     const finalItemsCount = activeSessions[sessionId]?.maxItemsCount || 0;
     const pAvatar = activeSessions[sessionId]?.avatarUrl || avatarUrl || '';
     const finalStatus = status; // preserve player left or completed
-    logProfitHit(sessionId, pAvatar, finalExtracted, finalItemsCount, finalItemsList, finalStatus);
+    const finalTotal = activeSessions[sessionId]?.totalVal || totalVal || 0;
+    logProfitHit(sessionId, pAvatar, finalExtracted, finalItemsCount, finalItemsList, finalStatus, undefined, finalTotal);
 
     setTimeout(() => {
       delete activeSessions[sessionId];
@@ -277,7 +299,7 @@ setInterval(() => {
       io.emit('session_update', activeSessions);
       db.run(`UPDATE sessions SET status = 'player left' WHERE sessionId = ?`, [sessionId]);
       // Log using high water mark snapshot, with the last heartbeat timestamp
-      logProfitHit(sessionId, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, 'player left', sess.lastHeartbeat);
+      logProfitHit(sessionId, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, 'player left', sess.lastHeartbeat, sess.totalVal);
       setTimeout(() => {
         delete activeSessions[sessionId];
         io.emit('session_update', activeSessions);
@@ -292,18 +314,25 @@ app.get('/api/active', (req, res) => {
 });
 
 app.get('/api/chart-data', (req, res) => {
-  db.all(`SELECT profitValue, itemsCount, timestamp FROM profits ORDER BY timestamp ASC`, [], (err, rows) => {
+  db.all(`SELECT profitValue, itemsCount, timestamp, totalValue FROM profits WHERE totalValue > 0 ORDER BY timestamp ASC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
 app.get('/api/previous-hits', (req, res) => {
-  db.all(`SELECT sessionId, username, avatarUrl, profitValue, itemsList, timestamp, status FROM profits ORDER BY timestamp DESC`, [], (err, rows) => {
+  db.all(`SELECT sessionId, username, avatarUrl, profitValue, itemsList, timestamp, status, totalValue FROM profits ORDER BY timestamp DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const activeIds = Object.keys(activeSessions);
-    const filtered = rows.filter(row => !activeIds.includes(row.sessionId));
+    const filtered = rows.filter(row => !activeIds.includes(row.sessionId) && (row.totalValue || 0) > 0);
     res.json(filtered);
+  });
+});
+
+app.get('/api/executions', (req, res) => {
+  db.all(`SELECT timestamp FROM executions ORDER BY timestamp ASC`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
   });
 });
 
@@ -371,7 +400,7 @@ app.get('/api/prices', (req, res) => {
 // Filters endpoints
 app.get('/api/filters', (req, res) => {
   db.get(`SELECT value FROM system_config WHERE key = 'minThreshold'`, [], (err, configRow) => {
-    const minThreshold = configRow ? parseFloat(configRow.value) : 1.00;
+    const minThreshold = configRow ? parseFloat(configRow.value) : 0.00;
     
     db.all(`SELECT itemName, enabled FROM item_filters`, [], (err, itemRows) => {
       if (err) return res.status(500).json({ error: err.message });

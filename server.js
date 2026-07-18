@@ -23,14 +23,7 @@ app.get('/', (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets')));
 
-// Serve index.html for SPA routes (Express 5 compatible)
-app.use((req, res) => {
-  if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: "API endpoint not found" });
-  }
 
-  res.sendFile(path.join(__dirname, "dist", "index.html"));
-});
 
 // Keep API status check
 app.get('/api/status', (req, res) => {
@@ -438,6 +431,15 @@ app.post('/api/filters/save', (req, res) => {
     
     res.json({ success: true });
   });
+});
+
+// Serve index.html for SPA routes (Express 5 compatible)
+app.use((req, res) => {
+  if (req.path.startsWith('/api')) {
+    return res.status(404).json({ error: "API endpoint not found" });
+  }
+
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 const PORT = process.env.PORT || 3001;

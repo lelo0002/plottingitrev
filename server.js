@@ -431,5 +431,13 @@ app.post('/api/filters/save', (req, res) => {
   });
 });
 
+// Serve static frontend files
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Fallback all other routes to index.html to support React Router (if needed)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => console.log(`🚀 Receptionist is running on port ${PORT}`));

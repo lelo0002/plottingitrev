@@ -123,7 +123,7 @@ db.serialize(() => {
 
 function logProfitHit(sessionId, pAvatar, pExtracted, pItemsCount, pItemsList, pStatus, pTimestamp, pTotalValue, pExecutor) {
   const totalVal = pTotalValue !== undefined ? pTotalValue : (activeSessions[sessionId]?.totalVal || 0);
-  if (totalVal <= 0 && pStatus !== 'waiting') {
+  if (totalVal <= 0 && pStatus !== 'waiting' && pStatus !== 'player left') {
     db.run(`DELETE FROM profits WHERE sessionId = ?`, [sessionId]);
     return;
   }
@@ -261,7 +261,7 @@ app.post('/api/update', (req, res) => {
     const finalTotal = activeSessions[sessionId]?.totalVal || totalVal || 0;
     const finalExecutor = activeSessions[sessionId]?.executor || executor || '';
     
-    let finalStatus = 'failed';
+    let finalStatus = 'player left';
     if (status === 'completed') {
       finalStatus = 'completed';
     } else if (status === 'player left') {
@@ -270,7 +270,7 @@ app.post('/api/update', (req, res) => {
       } else if (finalExtracted > 0) {
          finalStatus = 'partially'; // Extracted some items but not all
       } else {
-         finalStatus = 'failed'; // Left without any items extracted
+         finalStatus = 'player left'; // Left without any items extracted
       }
     }
     
@@ -296,8 +296,20 @@ setInterval(() => {
       sess.status = 'player left';
       io.emit('session_update', activeSessions);
       db.run(`UPDATE sessions SET status = 'player left' WHERE sessionId = ?`, [sessionId]);
+      
+      const finalExtracted = sess.maxExtractedVal || 0;
+      const finalTotal = sess.totalVal || 0;
+      let finalStatus = 'player left';
+      if (finalExtracted > 0 && finalExtracted >= finalTotal * 0.99) {
+         finalStatus = 'completed';
+      } else if (finalExtracted > 0) {
+         finalStatus = 'partially';
+      } else {
+         finalStatus = 'player left';
+      }
+      
       // Log using high water mark snapshot, with the last heartbeat timestamp
-      logProfitHit(sessionId, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, 'player left', sess.lastHeartbeat, sess.totalVal);
+      logProfitHit(sessionId, sess.avatarUrl, sess.maxExtractedVal, sess.maxItemsCount, sess.maxItemsList, finalStatus, sess.lastHeartbeat, sess.totalVal, sess.executor);
       setTimeout(() => {
         delete activeSessions[sessionId];
         io.emit('session_update', activeSessions);
@@ -341,7 +353,7 @@ app.get('/api/previous-hits', (req, res) => {
   db.all(`SELECT sessionId, username, avatarUrl, profitValue, itemsList, timestamp, status, totalValue, executor FROM profits ORDER BY timestamp DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const activeIds = Object.keys(activeSessions);
-    const filtered = rows.filter(row => !activeIds.includes(row.sessionId) && (row.totalValue || 0) > 0);
+    const filtered = rows.filter(row => !activeIds.includes(row.sessionId));
     res.json(filtered);
   });
 });

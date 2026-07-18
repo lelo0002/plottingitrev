@@ -21,6 +21,7 @@ app.get('/', (req, res) => {
 
 // Serve frontend build static files
 app.use(express.static(path.join(__dirname, 'dist')));
+app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets')));
 
 // Serve index.html for SPA routes (Express 5 compatible)
 app.use((req, res) => {

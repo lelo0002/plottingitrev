@@ -212,6 +212,10 @@ app.post('/api/update', (req, res) => {
     itemsCount = itemsList.reduce((a, i) => a + (i.extqty || 0), 0);
   }
 
+  if (!activeSessions[sessionId]) {
+    return res.status(404).json({ error: 'Session is inactive' });
+  }
+
   if (activeSessions[sessionId]) {
     if (totalVal !== undefined && totalVal === 0 && (status !== 'completed' && status !== 'player left')) {
       delete activeSessions[sessionId];

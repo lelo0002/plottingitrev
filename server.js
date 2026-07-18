@@ -13,16 +13,24 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 
+// API homepage
+app.get('/', (req, res) => {
+  res.json({
+    status: "online",
+    message: "mm2hook API is running successfully!"
+  });
+});
+
 // Serve frontend build static files
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Serve index.html for SPA routes (Express 5 compatible)
-app.use((req, res, next) => {
+app.use((req, res) => {
   if (req.path.startsWith('/api')) {
-    return res.status(404).json({ error: 'Not Found' });
+    return res.status(404).json({ error: "API endpoint not found" });
   }
 
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+  res.sendFile(path.join(__dirname, "dist", "index.html"));
 });
 
 // Keep API status check

@@ -17,7 +17,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Serve index.html for any non-API route to support single page app routing
-app.get('/{path}*', (req, res) => {
+app.get('/*', (req, res) => {
   // If the path looks like an API call but didn't match any route, return 404
   if (req.path.startsWith('/api')) {
     return res.status(404).json({ error: 'Not Found' });
